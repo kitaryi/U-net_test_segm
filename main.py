@@ -9,8 +9,6 @@ import numpy as np
 
 
 # Определение примерной структуры unet
-# https://drive.google.com/file/d/1bG_0SyGJ8EYRZv1Ch4bymEptv8zDqlYk/view?usp=sharing
-# https://drive.google.com/file/d/1R5hZ7Uwm4VywNRcw-1pp0VbkCr7OyOOW/view?usp=sharing
 
 class UNet(nn.Module):
     def __init__(self):
@@ -70,7 +68,6 @@ class UNet(nn.Module):
         x = self.sigmoid(x)
         return x
 
-# Преобразование изображений
 class SegmentationDataset(Dataset):
     def __init__(self, image_dir, mask_dir, transform=None):
         self.image_dir = image_dir
@@ -83,19 +80,32 @@ class SegmentationDataset(Dataset):
 
     def __getitem__(self, idx):
         img_name = self.images[idx]
-        if "_bright" in img_name:
-            base_name = img_name.split("_bright")[0]
-            mask_name = base_name + "_bright.png"
-        elif "_contrast" in img_name:
-            base_name = img_name.split("_contrast")[0]
-            mask_name = base_name + "_contrast.png"
-        else:
-            base_name = img_name.split(".JPG")[0]
-            mask_name = base_name + ".png"
+        base_name = img_name.split(".JPG")[0]
+        mask_name = base_name + ".png"
         img_path = os.path.join(self.image_dir, img_name)
         mask_path = os.path.join(self.mask_dir, mask_name)
-        image = Image.open(img_path).convert("L")
-        mask = Image.open(mask_path).convert("L")
+
+        try:  # Добавлена обработка исключений
+            image = Image.open(img_path).convert("L")
+            mask = Image.open(mask_path).convert("L")
+        except FileNotFoundError:
+            print(f"Ошибка: Файл не найден для {img_name} или {mask_name}")
+            return None, None
+
+        original_width = 1216
+        original_height = 1824
+        target_size = (original_width, original_height)
+
+        width, height = image.size
+
+        if width > height:
+            image = image.rotate(90, expand=True)
+            mask = mask.rotate(90, expand=True)
+            width, height = image.size
+
+        if width != original_width or height != original_height:
+            image = image.resize(target_size, Image.Resampling.LANCZOS)
+            mask = mask.resize(target_size, Image.Resampling.NEAREST)
 
         if self.transform:
             image = self.transform(image)
@@ -103,16 +113,38 @@ class SegmentationDataset(Dataset):
 
         return image, mask
 
+def filter_none_indices(dataset):
+    valid_indices = []
+    for idx in range(len(dataset)):
+        data = dataset[idx]
+        if data is not None:
+            valid_indices.append(idx)
+        else:
+            print(f"Исключен индекс {idx} из датасета.")
+    return valid_indices
+
+
+class SubsetDataset(Dataset):
+    def __init__(self, dataset, indices):
+        self.dataset = dataset
+        self.indices = indices
+    def __len__(self):
+        return len(self.indices)
+    def __getitem__(self, idx):
+        return self.dataset[self.indices[idx]]
+
 
 transform = transforms.Compose([
     transforms.ToTensor(),
 ])
 
 
-im_dir = 'D:/your_dataset'
-mask_dir = 'D:/your_dataset_result'
+im_dir = 'C:/Users/Developer/PycharmProjects/Segm_test/your_dataset'
+mask_dir = 'C:/Users/Developer/PycharmProjects/Segm_test/your_dataset_result'
 train_dataset = SegmentationDataset(im_dir, mask_dir, transform=transform)
-train_loader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+valid_indices = filter_none_indices(train_dataset)
+train_dataset = SubsetDataset(train_dataset, valid_indices)
+train_loader = DataLoader(train_dataset, batch_size=5, shuffle=True)
 print(torch.cuda.get_device_name(0))
 device = torch.device("cuda")
 model = UNet().to(device)
